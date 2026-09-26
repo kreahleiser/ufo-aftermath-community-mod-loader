@@ -9,11 +9,11 @@ Fan-made **OpenGL wrapper** for *UFO: Aftermath* (2003). The stock game is locke
 
 Not affiliated with Altar, Fulqrum, or Valve.
 
-**Prefer building it yourself.** A random `opengl32.dll` next to a game is exactly what malware looks like. The whole program is this repo. GitHub Actions also compiles it so you can compare hashes.
+**Prefer building it yourself.** A random `opengl32.dll` next to a game is exactly what malware looks like. The whole program is this repo. Releases also attach a DLL built from the same source.
 
 ## Install
 
-1. Get `opengl32.dll` — build locally (below) or from [Actions](../../actions) artifacts / a [Release](../../releases).
+1. Get `opengl32.dll` — run `build.bat` locally, or download it from [Releases](../../releases).
 2. Copy **`opengl32.dll`** and **`ufo_display.ini`** next to `UFO.exe`:
 
    `Steam\steamapps\common\UFO Aftermath\`

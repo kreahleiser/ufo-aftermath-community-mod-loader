@@ -14,12 +14,14 @@ Not affiliated with Altar, Fulqrum, ALPine, or Valve.
 
 ## Install
 
-1. Download the release zip from [Releases](../../releases).
-2. Copy `opengl32.dll`, `ufo_mod_manager.exe`, and the `plugins` folder next to `UFO.exe`:
+1. Download the release zip from [Releases](../../releases) and extract it.
+2. Run `ufo_mod_setup.exe` from that folder (it needs to sit next to `opengl32.dll`).
+3. Setup looks for Aftermath in Steam library folders on disk. If the path is wrong, click **Browse...** and pick `UFO.exe`.
+4. Click **Install**. Open the Mod Manager from there if you want.
 
-   `Steam\steamapps\common\UFO Aftermath\`
+The first game launch writes `ufo_display.ini` and creates a `mods` folder. Bundled plugins stay in `plugins` until you tick them on.
 
-3. Launch once. The DLL writes `ufo_display.ini` and creates a `mods` folder. Bundled plugins stay in `plugins` until you tick them on.
+Old ALPine tools look for the game in the registry. Steam never writes that key. **Apply Registry Fix** in the manager stores the folder next to `UFO.exe` as `HKLM\SOFTWARE\ALTAR\UFOAftermath\Path`. While that entry matches this install, the button reads **Remove Registry Fix**. Windows may ask for administrator permission.
 
 To uninstall, delete `opengl32.dll` and `ufo_mod_manager.exe`. You can also remove `mods`, `plugins`, `ufo_display.ini`, and `modalpine.vfs` if you want a clean folder.
 
@@ -43,7 +45,7 @@ Only needed if you want to compile it yourself. Visual Studio with the **x86** C
 build.bat
 ```
 
-That produces `opengl32.dll` and `ufo_mod_manager.exe`. Copy them into the game directory.
+That produces `opengl32.dll`, `ufo_mod_manager.exe`, and `ufo_mod_setup.exe`.
 
 ## Known Limits
 

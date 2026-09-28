@@ -10,11 +10,14 @@
 #include <ctype.h>
 #include <string>
 #include <vector>
+#include "resource.h"
+#include "gamepath.h"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "uxtheme.lib")
+#pragma comment(lib, "advapi32.lib")
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 static HWND g_list;
@@ -33,6 +36,7 @@ static HWND g_paramEdit;
 static HWND g_paramHint;
 static HWND g_chkIntro;
 static HWND g_chkDev;
+static HWND g_regBtn;
 static char g_game[MAX_PATH];
 static int g_refreshing;
 static int g_loadingDisplay;
@@ -44,6 +48,14 @@ static HBRUSH g_brList;
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
+#ifndef KEY_WOW64_64KEY
+#define KEY_WOW64_64KEY 0x0100
+#endif
+#ifndef KEY_WOW64_32KEY
+#define KEY_WOW64_32KEY 0x0200
+#endif
+
+#define UFO_REG_SUBKEY "SOFTWARE\\ALTAR\\UFOAftermath"
 
 static void set_status(const char *s);
 
@@ -309,24 +321,243 @@ static void set_status(const char *s)
     SetWindowTextA(g_status, s);
 }
 
-static int has_ufo_exe(const char *dir)
+static void trim_slash(char *s)
 {
-    char p[MAX_PATH];
-    _snprintf(p, MAX_PATH, "%s\\UFO.exe", dir);
-    return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES;
+    size_t n = strlen(s);
+    while (n && (s[n - 1] == '\\' || s[n - 1] == '/'))
+        s[--n] = 0;
 }
 
-static int find_game(char *out, int n)
+static int path_same(const char *a, const char *b)
+{
+    char aa[MAX_PATH], bb[MAX_PATH];
+    strncpy(aa, a ? a : "", MAX_PATH - 1); aa[MAX_PATH - 1] = 0;
+    strncpy(bb, b ? b : "", MAX_PATH - 1); bb[MAX_PATH - 1] = 0;
+    trim_slash(aa);
+    trim_slash(bb);
+    return _stricmp(aa, bb) == 0;
+}
+
+static int read_game_path_view(REGSAM wow, char *out, DWORD n)
+{
+    HKEY k;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, UFO_REG_SUBKEY, 0, KEY_READ | wow, &k) != ERROR_SUCCESS)
+        return 0;
+    DWORD type = 0, sz = n;
+    LONG e = RegQueryValueExA(k, "Path", 0, &type, (LPBYTE)out, &sz);
+    RegCloseKey(k);
+    if (e != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ) || !out[0])
+        return 0;
+    return 1;
+}
+
+static int registry_fix_active(void)
+{
+    if (!g_game[0]) return 0;
+    char p[MAX_PATH];
+    p[0] = 0;
+    if (read_game_path_view(KEY_WOW64_32KEY, p, MAX_PATH) && path_same(p, g_game))
+        return 1;
+    p[0] = 0;
+    if (read_game_path_view(KEY_WOW64_64KEY, p, MAX_PATH) && path_same(p, g_game))
+        return 1;
+    return 0;
+}
+
+static LONG write_game_path_view(REGSAM wow, const char *path)
+{
+    HKEY k;
+    DWORD disp = 0;
+    LONG e = RegCreateKeyExA(HKEY_LOCAL_MACHINE, UFO_REG_SUBKEY, 0, 0, 0,
+        KEY_WRITE | wow, 0, &k, &disp);
+    if (e != ERROR_SUCCESS) return e;
+    e = RegSetValueExA(k, "Path", 0, REG_SZ, (const BYTE *)path, (DWORD)strlen(path) + 1);
+    RegCloseKey(k);
+    return e;
+}
+
+static LONG apply_registry_fix(const char *path)
+{
+    char full[MAX_PATH];
+    strncpy(full, path, MAX_PATH - 1);
+    full[MAX_PATH - 1] = 0;
+    trim_slash(full);
+    LONG e32 = write_game_path_view(KEY_WOW64_32KEY, full);
+    LONG e64 = write_game_path_view(KEY_WOW64_64KEY, full);
+    if (e32 == ERROR_ACCESS_DENIED || e64 == ERROR_ACCESS_DENIED)
+        return ERROR_ACCESS_DENIED;
+    if (e32 != ERROR_SUCCESS) return e32;
+    return ERROR_SUCCESS;
+}
+
+static LONG delete_game_path_view(REGSAM wow, const char *game)
+{
+    HKEY k;
+    LONG e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, UFO_REG_SUBKEY, 0,
+        KEY_READ | KEY_WRITE | wow, &k);
+    if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND)
+        return ERROR_SUCCESS;
+    if (e != ERROR_SUCCESS) return e;
+    char p[MAX_PATH];
+    p[0] = 0;
+    DWORD type = 0, sz = MAX_PATH;
+    LONG q = RegQueryValueExA(k, "Path", 0, &type, (LPBYTE)p, &sz);
+    int ours = (q != ERROR_SUCCESS) || !p[0] || path_same(p, game);
+    LONG del = ERROR_SUCCESS;
+    if (ours) {
+        del = RegDeleteValueA(k, "Path");
+        if (del == ERROR_FILE_NOT_FOUND) del = ERROR_SUCCESS;
+    }
+    DWORD nkeys = 1, nvals = 1;
+    RegQueryInfoKeyA(k, 0, 0, 0, &nkeys, 0, 0, &nvals, 0, 0, 0, 0);
+    RegCloseKey(k);
+    if (ours && nkeys == 0 && nvals == 0)
+        RegDeleteKeyExA(HKEY_LOCAL_MACHINE, UFO_REG_SUBKEY, wow, 0);
+    return del;
+}
+
+static LONG remove_registry_fix(const char *path)
+{
+    LONG e32 = delete_game_path_view(KEY_WOW64_32KEY, path);
+    LONG e64 = delete_game_path_view(KEY_WOW64_64KEY, path);
+    if (e32 == ERROR_ACCESS_DENIED || e64 == ERROR_ACCESS_DENIED)
+        return ERROR_ACCESS_DENIED;
+    if (e32 != ERROR_SUCCESS) return e32;
+    return ERROR_SUCCESS;
+}
+
+static int process_is_elevated(void)
+{
+    HANDLE tok = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok))
+        return 0;
+    TOKEN_ELEVATION el;
+    DWORD sz = 0;
+    BOOL ok = GetTokenInformation(tok, TokenElevation, &el, sizeof(el), &sz);
+    CloseHandle(tok);
+    return (ok && el.TokenIsElevated) ? 1 : 0;
+}
+
+static int elevate_registry(const char *flag)
 {
     char exe[MAX_PATH];
     GetModuleFileNameA(NULL, exe, MAX_PATH);
-    char *slash = strrchr(exe, '\\');
-    if (slash) *slash = 0;
-    if (has_ufo_exe(exe)) { strncpy(out, exe, n - 1); out[n - 1] = 0; return 1; }
+    char params[MAX_PATH + 40];
+    _snprintf(params, sizeof(params), "%s \"%s\"", flag, g_game);
+    SHELLEXECUTEINFOA sei;
+    memset(&sei, 0, sizeof(sei));
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.hwnd = g_main ? g_main : GetDesktopWindow();
+    sei.lpVerb = "runas";
+    sei.lpFile = exe;
+    sei.lpParameters = params;
+    sei.nShow = SW_HIDE;
+    if (!ShellExecuteExA(&sei)) {
+        DWORD err = GetLastError();
+        if (err == ERROR_CANCELLED || err == 1223)
+            return -1;
+        return 0;
+    }
+    if (!sei.hProcess) return 0;
+    WaitForSingleObject(sei.hProcess, INFINITE);
+    DWORD code = 1;
+    GetExitCodeProcess(sei.hProcess, &code);
+    CloseHandle(sei.hProcess);
+    return (code == 0) ? 1 : 0;
+}
 
-    const char *steam = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\UFO Aftermath";
-    if (has_ufo_exe(steam)) { strncpy(out, steam, n - 1); out[n - 1] = 0; return 1; }
-    return 0;
+static void refresh_reg_button(void)
+{
+    if (!g_regBtn) return;
+    int have = g_game[0] && has_ufo_exe(g_game);
+    EnableWindow(g_regBtn, have ? TRUE : FALSE);
+    if (!have) {
+        SetWindowTextA(g_regBtn, "Apply Registry Fix");
+        return;
+    }
+    if (registry_fix_active())
+        SetWindowTextA(g_regBtn, "Remove Registry Fix");
+    else
+        SetWindowTextA(g_regBtn, "Apply Registry Fix");
+}
+
+static void toggle_registry_fix(void)
+{
+    if (!g_game[0]) {
+        set_status("Could not find UFO.exe next to the mod loader.");
+        return;
+    }
+    int active = registry_fix_active();
+    int want_apply = !active;
+
+    if (!process_is_elevated()) {
+        int r = elevate_registry(want_apply ? "--registry-apply" : "--registry-remove");
+        if (r < 0) {
+            set_status("Registry change cancelled.");
+            return;
+        }
+        if (!r) {
+            MessageBoxA(g_main,
+                "Windows needs administrator permission to write HKLM\\SOFTWARE\\ALTAR\\UFOAftermath\\Path.",
+                "UFO Aftermath Community Mod Loader", MB_OK | MB_ICONWARNING);
+            set_status("Could not update the registry. Administrator permission is required.");
+            return;
+        }
+    } else {
+        LONG e = want_apply ? apply_registry_fix(g_game) : remove_registry_fix(g_game);
+        if (e != ERROR_SUCCESS) {
+            set_status("Could not update the registry.");
+            return;
+        }
+    }
+
+    refresh_reg_button();
+    int now = registry_fix_active();
+    if (want_apply && now)
+        set_status("Registry Path written for ALPine and other tools. Restart those tools if they are open.");
+    else if (!want_apply && !now)
+        set_status("Removed the UFO Aftermath Path registry entry.");
+    else
+        set_status("Could not update the registry. Administrator permission is required.");
+}
+
+static int handle_registry_cmdline(const char *cmd)
+{
+    if (!cmd) return 0;
+    while (*cmd == ' ') cmd++;
+    int apply = 0, remove = 0;
+    if (_strnicmp(cmd, "--registry-apply", 16) == 0) {
+        apply = 1;
+        cmd += 16;
+    } else if (_strnicmp(cmd, "--registry-remove", 17) == 0) {
+        remove = 1;
+        cmd += 17;
+    } else {
+        return 0;
+    }
+    while (*cmd == ' ') cmd++;
+    char path[MAX_PATH];
+    path[0] = 0;
+    if (*cmd == '"') {
+        cmd++;
+        const char *end = strchr(cmd, '"');
+        size_t n = end ? (size_t)(end - cmd) : strlen(cmd);
+        if (n >= MAX_PATH) n = MAX_PATH - 1;
+        memcpy(path, cmd, n);
+        path[n] = 0;
+    } else if (*cmd) {
+        strncpy(path, cmd, MAX_PATH - 1);
+        path[MAX_PATH - 1] = 0;
+    }
+    if (!path[0] || !has_ufo_exe(path)) {
+        if (!find_game(path, MAX_PATH))
+            return 2;
+    }
+    strncpy(g_game, path, MAX_PATH - 1);
+    g_game[MAX_PATH - 1] = 0;
+    LONG e = apply ? apply_registry_fix(g_game) : remove_registry_fix(g_game);
+    return (e == ERROR_SUCCESS) ? 1 : 2;
 }
 
 static int lua_param_default(const char *path)
@@ -718,7 +949,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             WS_CHILD | WS_VISIBLE, 530, 186, 430, 18, hwnd, 0, 0, 0);
         g_fpsCombo = CreateWindowA("COMBOBOX", "",
             WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-            530, 206, 200, 200, hwnd, (HMENU)11, 0, 0);
+            530, 206, 430, 200, hwnd, (HMENU)11, 0, 0);
         for (int i = 0; i < kFpsN; i++) {
             char t[16];
             _snprintf(t, 16, "%d", kFps[i]);
@@ -750,17 +981,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             122, 380, 140, 28, hwnd, (HMENU)2, 0, 0);
         HWND b3 = CreateWindowA("BUTTON", "Open Plugins Folder", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
             272, 380, 160, 28, hwnd, (HMENU)3, 0, 0);
+        g_regBtn = CreateWindowA("BUTTON", "Apply Registry Fix",
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 12, 414, 500, 26, hwnd, (HMENU)6, 0, 0);
         g_darkChk = CreateWindowA("BUTTON", "Dark Mode",
             WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 530, 396, 150, 24, hwnd, (HMENU)4, 0, 0);
         HWND launch = CreateWindowA("BUTTON", "Launch Game",
-            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 780, 378, 180, 36, hwnd, (HMENU)5, 0, 0);
+            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 780, 378, 200, 44, hwnd, (HMENU)5, 0, 0);
 
-        HWND kids[] = { hdr, lmode, lfps, g_modeCombo, g_fpsCombo, g_modeHint, g_chkBorder, g_chkCrisp, g_chkLog, g_chkIntro, g_chkDev, b1, b2, b3, g_darkChk, launch, g_list, g_paramLabel, g_paramEdit, g_paramHint };
+        HWND kids[] = { hdr, lmode, lfps, g_modeCombo, g_fpsCombo, g_modeHint, g_chkBorder, g_chkCrisp, g_chkLog, g_chkIntro, g_chkDev, b1, b2, b3, g_regBtn, g_darkChk, launch, g_list, g_paramLabel, g_paramEdit, g_paramHint };
         for (int i = 0; i < (int)(sizeof(kids) / sizeof(kids[0])); i++)
             SendMessage(kids[i], WM_SETFONT, (WPARAM)font, TRUE);
 
         g_status = CreateWindowA("STATIC", "Display and plugin changes apply on the next launch.",
-            WS_CHILD | WS_VISIBLE, 12, 438, 1040, 22, hwnd, 0, 0, 0);
+            WS_CHILD | WS_VISIBLE, 12, 450, 1040, 22, hwnd, 0, 0, 0);
         SendMessage(g_status, WM_SETFONT, (WPARAM)font, TRUE);
 
         if (!find_game(g_game, MAX_PATH)) g_game[0] = 0;
@@ -769,6 +1002,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         load_launch_flags();
         refresh_list();
         load_display_fields();
+        refresh_reg_button();
         apply_theme(hwnd);
         return 0;
     }
@@ -801,6 +1035,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             apply_theme(hwnd);
         } else if (LOWORD(wParam) == 5) {
             launch_game();
+        } else if (LOWORD(wParam) == 6) {
+            toggle_registry_fix();
         } else if (LOWORD(wParam) == 15 || LOWORD(wParam) == 16) {
             save_launch_flags();
         } else if (LOWORD(wParam) == 2 && g_game[0]) {
@@ -813,7 +1049,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             _snprintf(p, MAX_PATH, "%s\\plugins", g_game);
             CreateDirectoryA(p, 0);
             ShellExecuteA(hwnd, "open", p, 0, 0, SW_SHOWNORMAL);
-        } else if (LOWORD(wParam) == 10 || LOWORD(wParam) == 11) {
+        } else if (LOWORD(wParam) == 10 || LOWORD(wParam) == 11 || LOWORD(wParam) == 17) {
             if (HIWORD(wParam) == CBN_SELCHANGE) {
                 if (LOWORD(wParam) == 10) update_mode_hint();
                 save_display_fields();
@@ -872,24 +1108,33 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     return DefWindowProcA(hwnd, msg, wParam, lParam);
 }
 
-int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int show)
+int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR cmd, int show)
 {
+    int regCmd = handle_registry_cmdline(cmd);
+    if (regCmd == 1) return 0;
+    if (regCmd == 2) return 1;
+
     g_brDark = CreateSolidBrush(RGB(32, 32, 32));
     g_brList = CreateSolidBrush(RGB(32, 32, 32));
     load_dark();
 
-    WNDCLASSA wc;
+    WNDCLASSEXA wc;
     memset(&wc, 0, sizeof(wc));
+    wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = WndProc;
     wc.hInstance = inst;
     wc.hbrBackground = g_dark ? g_brDark : (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = "UfoModMgr";
     wc.hCursor = LoadCursor(0, IDC_ARROW);
-    RegisterClassA(&wc);
+    wc.hIcon = LoadIconA(inst, MAKEINTRESOURCEA(IDI_APP));
+    wc.hIconSm = (HICON)LoadImageA(inst, MAKEINTRESOURCEA(IDI_APP), IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+    if (!wc.hIconSm) wc.hIconSm = wc.hIcon;
+    RegisterClassExA(&wc);
 
     HWND hwnd = CreateWindowA("UfoModMgr", "UFO Aftermath Community Mod Loader",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1100, 520, 0, 0, inst, 0);
+        CW_USEDEFAULT, CW_USEDEFAULT, 1100, 548, 0, 0, inst, 0);
     ShowWindow(hwnd, show);
 
     MSG msg;

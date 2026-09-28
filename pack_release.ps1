@@ -6,6 +6,7 @@ Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 Copy-Item (Join-Path $here "opengl32.dll") $stage
 Copy-Item (Join-Path $here "ufo_mod_manager.exe") $stage
+Copy-Item (Join-Path $here "ufo_mod_setup.exe") $stage
 Copy-Item (Join-Path $here "README.md") $stage
 Copy-Item (Join-Path $here "LICENSE") $stage
 Copy-Item (Join-Path $here "bundled_plugins") (Join-Path $stage "plugins") -Recurse

@@ -73,7 +73,7 @@ EXPORTS
     glDisable @71
     glDisableClientState = tramp_glDisableClientState @72
     glDrawArrays = tramp_glDrawArrays @73
-    glDrawBuffer = tramp_glDrawBuffer @74
+    glDrawBuffer @74
     glDrawElements = tramp_glDrawElements @75
     glDrawPixels = tramp_glDrawPixels @76
     glEdgeFlag = tramp_glEdgeFlag @77
@@ -243,7 +243,7 @@ EXPORTS
     glRasterPos4iv = tramp_glRasterPos4iv @241
     glRasterPos4s = tramp_glRasterPos4s @242
     glRasterPos4sv = tramp_glRasterPos4sv @243
-    glReadBuffer = tramp_glReadBuffer @244
+    glReadBuffer @244
     glReadPixels = tramp_glReadPixels @245
     glRectd = tramp_glRectd @246
     glRectdv = tramp_glRectdv @247

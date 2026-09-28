@@ -56,8 +56,14 @@ cl /nologo /O2 /EHsc /I%LUA% /I%MINIZ% bake_test.cpp vfs.cpp fontpad.cpp modload
 if errorlevel 1 exit /b 1
 
 echo Compiling mod manager...
-cl /nologo /O2 /EHsc mod_manager.cpp /Fe:ufo_mod_manager.exe /link /SUBSYSTEM:WINDOWS /INCREMENTAL:NO user32.lib kernel32.lib gdi32.lib comctl32.lib shell32.lib
+rc /nologo /fo ufo_mod_manager.res ufo_mod_manager.rc
+if errorlevel 1 exit /b 1
+cl /nologo /O2 /EHsc /utf-8 mod_manager.cpp gamepath.cpp ufo_mod_manager.res /Fe:ufo_mod_manager.exe /link /SUBSYSTEM:WINDOWS /INCREMENTAL:NO /MANIFEST:EMBED /MANIFESTINPUT:ufo_mod_manager.exe.manifest user32.lib kernel32.lib gdi32.lib comctl32.lib shell32.lib advapi32.lib dwmapi.lib uxtheme.lib
+if errorlevel 1 exit /b 1
+
+echo Compiling installer...
+cl /nologo /O2 /EHsc /utf-8 installer.cpp gamepath.cpp ufo_mod_manager.res /Fe:ufo_mod_setup.exe /link /SUBSYSTEM:WINDOWS /INCREMENTAL:NO /MANIFEST:EMBED /MANIFESTINPUT:ufo_mod_manager.exe.manifest user32.lib kernel32.lib gdi32.lib comctl32.lib comdlg32.lib shell32.lib advapi32.lib
 if errorlevel 1 exit /b 1
 
 echo Built %cd%\opengl32.dll
-dir opengl32.dll bake_test.exe ufo_mod_manager.exe
+dir opengl32.dll bake_test.exe ufo_mod_manager.exe ufo_mod_setup.exe

@@ -27,8 +27,19 @@
 #define GL_CLAMP_TO_EDGE    0x812F
 #define GL_POLYGON_SMOOTH   0x0B41
 #define GL_LINE_SMOOTH      0x0B20
+#define GL_FRAMEBUFFER      0x8D40
+#define GL_RENDERBUFFER     0x8D41
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_DEPTH_STENCIL_ATTACHMENT 0x821A
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_RGBA8            0x8058
+#define GL_RGBA             0x1908
+#define GL_UNSIGNED_BYTE    0x1401
+#define GL_DEPTH24_STENCIL8 0x88F0
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
 
-#define UFO_DISPLAY_VERSION "1.1.0"
+#define UFO_DISPLAY_VERSION "1.2.0"
 #define UFO_PRODUCT_NAME "UFO Aftermath Community Mod Loader"
 
 static const int VIRT_W = 1024;
@@ -41,9 +52,13 @@ static int     g_mode = 169;      // 169 or 43
 static int     g_borderless = 1;
 static int     g_frameLimit = 60;
 static int     g_crispUi = 1;
+static int     g_renderScale = 100; /* FBO SSAA parked; always 1x */
 static int     g_in2D;
 static int     g_vpX, g_vpY, g_vpW, g_vpH;
 static int     g_winW, g_winH;
+static int     g_rtW, g_rtH;
+static unsigned int g_fbo, g_fboTex, g_fboDs;
+static int     g_ssaaReady;
 static int     g_inited;
 static int     g_logged;
 static int     g_cursorLogged;
@@ -79,6 +94,46 @@ static void (APIENTRY *orig_glTexParameteri)(unsigned int, unsigned int, int);
 static BOOL (WINAPI *orig_wglMakeCurrent)(HDC, HGLRC);
 static PROC (WINAPI *orig_wglGetProcAddress)(LPCSTR);
 static HDC  (WINAPI *orig_wglGetCurrentDC)(void);
+static void (APIENTRY *pglGenFramebuffers)(int, unsigned int*);
+static void (APIENTRY *pglBindFramebuffer)(unsigned int, unsigned int);
+static void (APIENTRY *pglDeleteFramebuffers)(int, const unsigned int*);
+static unsigned int (APIENTRY *pglCheckFramebufferStatus)(unsigned int);
+static void (APIENTRY *pglFramebufferTexture2D)(unsigned int, unsigned int, unsigned int, unsigned int, int);
+static void (APIENTRY *pglGenRenderbuffers)(int, unsigned int*);
+static void (APIENTRY *pglBindRenderbuffer)(unsigned int, unsigned int);
+static void (APIENTRY *pglDeleteRenderbuffers)(int, const unsigned int*);
+static void (APIENTRY *pglRenderbufferStorage)(unsigned int, unsigned int, int, int);
+static void (APIENTRY *pglFramebufferRenderbuffer)(unsigned int, unsigned int, unsigned int, unsigned int);
+static void (APIENTRY *pglBlitFramebuffer)(int, int, int, int, int, int, int, int, unsigned int, unsigned int);
+static void (APIENTRY *pglGenTextures)(int, unsigned int*);
+static void (APIENTRY *pglDeleteTextures)(int, const unsigned int*);
+static void (APIENTRY *pglTexImage2D)(unsigned int, int, int, int, int, int, unsigned int, unsigned int, const void*);
+static void (APIENTRY *pglBegin)(unsigned int);
+static void (APIENTRY *pglEnd)(void);
+static void (APIENTRY *pglVertex2i)(int, int);
+static void (APIENTRY *pglTexCoord2f)(float, float);
+static void (APIENTRY *pglColor4f)(float, float, float, float);
+static void (APIENTRY *pglMatrixMode)(unsigned int);
+static void (APIENTRY *pglPushMatrix)(void);
+static void (APIENTRY *pglPopMatrix)(void);
+static void (APIENTRY *pglLoadIdentity)(void);
+static void (APIENTRY *pglPushAttrib)(unsigned int);
+static void (APIENTRY *pglPopAttrib)(void);
+static void (APIENTRY *pglDrawBuffer)(unsigned int);
+static void (APIENTRY *pglDrawBuffers)(int, const unsigned int*);
+static void (APIENTRY *pglReadBuffer)(unsigned int);
+static void (APIENTRY *pglTexEnvi)(unsigned int, unsigned int, int);
+static void (APIENTRY *pglClearColor)(float, float, float, float);
+static void (APIENTRY *pglGetFloatv)(unsigned int, float*);
+static void (APIENTRY *pglDisableClientState)(unsigned int);
+static void (APIENTRY *pglReadPixels)(int, int, int, int, unsigned int, unsigned int, void*);
+static void (APIENTRY *pglDrawPixels)(int, int, unsigned int, unsigned int, const void*);
+static void (APIENTRY *pglPixelZoom)(float, float);
+static void (APIENTRY *pglRasterPos2i)(int, int);
+static void (APIENTRY *pglPixelStorei)(unsigned int, int);
+static unsigned char *g_ssaaPixels;
+static int g_ssaaPixCap;
+static int g_ssaaLogPresent;
 
 static void (APIENTRY *orig_gluPerspective)(double, double, double, double);
 static void (APIENTRY *orig_gluOrtho2D)(double, double, double, double);
@@ -173,6 +228,7 @@ static void LoadIni()
     g_crispUi = GetPrivateProfileIntA("Display", "CrispUi", 1, path);
     if (g_mode != 43 && g_mode != 169) g_mode = 169;
     if (g_frameLimit < 0) g_frameLimit = 0;
+    g_renderScale = 100;
 }
 
 static void OpenLog()
@@ -210,6 +266,226 @@ static void ComputeLetterbox(int winW, int winH)
     }
     if (g_vpW < 1) g_vpW = 1;
     if (g_vpH < 1) g_vpH = 1;
+    g_rtW = (int)((long long)g_vpW * g_renderScale / 100);
+    g_rtH = (int)((long long)g_vpH * g_renderScale / 100);
+    if (g_rtW < 1) g_rtW = 1;
+    if (g_rtH < 1) g_rtH = 1;
+}
+
+static PROC load_gl(const char *a, const char *b)
+{
+    PROC p = 0;
+    if (orig_wglGetProcAddress) p = orig_wglGetProcAddress(a);
+    if (!p && orig_wglGetProcAddress && b) p = orig_wglGetProcAddress(b);
+    if (!p && g_realGl) p = GetProcAddress(g_realGl, a);
+    return p;
+}
+
+static void bind_ssaa_draw()
+{
+    if (!pglBindFramebuffer || !g_fbo) return;
+    pglBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
+    if (pglDrawBuffers) {
+        unsigned int buf = GL_COLOR_ATTACHMENT0;
+        pglDrawBuffers(1, &buf);
+    } else if (pglDrawBuffer) {
+        pglDrawBuffer(GL_COLOR_ATTACHMENT0);
+    }
+    if (pglReadBuffer) pglReadBuffer(GL_COLOR_ATTACHMENT0);
+}
+
+static void destroy_ssaa()
+{
+    if (pglBindFramebuffer) pglBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (g_fbo && pglDeleteFramebuffers) pglDeleteFramebuffers(1, &g_fbo);
+    if (g_fboDs && pglDeleteRenderbuffers) pglDeleteRenderbuffers(1, &g_fboDs);
+    if (g_fboTex && pglDeleteTextures) pglDeleteTextures(1, &g_fboTex);
+    g_fbo = g_fboTex = g_fboDs = 0;
+}
+
+static int ensure_ssaa()
+{
+    if (g_renderScale == 100 || g_rtW < 2 || g_rtH < 2) {
+        if (g_fbo) destroy_ssaa();
+        return 0;
+    }
+    if (!pglGenFramebuffers) {
+        pglGenFramebuffers = (void (APIENTRY *)(int, unsigned int*))load_gl("glGenFramebuffers", "glGenFramebuffersEXT");
+        pglBindFramebuffer = (void (APIENTRY *)(unsigned int, unsigned int))load_gl("glBindFramebuffer", "glBindFramebufferEXT");
+        pglDeleteFramebuffers = (void (APIENTRY *)(int, const unsigned int*))load_gl("glDeleteFramebuffers", "glDeleteFramebuffersEXT");
+        pglCheckFramebufferStatus = (unsigned int (APIENTRY *)(unsigned int))load_gl("glCheckFramebufferStatus", "glCheckFramebufferStatusEXT");
+        pglFramebufferTexture2D = (void (APIENTRY *)(unsigned int, unsigned int, unsigned int, unsigned int, int))load_gl("glFramebufferTexture2D", "glFramebufferTexture2DEXT");
+        pglGenRenderbuffers = (void (APIENTRY *)(int, unsigned int*))load_gl("glGenRenderbuffers", "glGenRenderbuffersEXT");
+        pglBindRenderbuffer = (void (APIENTRY *)(unsigned int, unsigned int))load_gl("glBindRenderbuffer", "glBindRenderbufferEXT");
+        pglDeleteRenderbuffers = (void (APIENTRY *)(int, const unsigned int*))load_gl("glDeleteRenderbuffers", "glDeleteRenderbuffersEXT");
+        pglRenderbufferStorage = (void (APIENTRY *)(unsigned int, unsigned int, int, int))load_gl("glRenderbufferStorage", "glRenderbufferStorageEXT");
+        pglFramebufferRenderbuffer = (void (APIENTRY *)(unsigned int, unsigned int, unsigned int, unsigned int))load_gl("glFramebufferRenderbuffer", "glFramebufferRenderbufferEXT");
+        pglBlitFramebuffer = (void (APIENTRY *)(int, int, int, int, int, int, int, int, unsigned int, unsigned int))load_gl("glBlitFramebuffer", "glBlitFramebufferEXT");
+        pglGenTextures = (void (APIENTRY *)(int, unsigned int*))GetProcAddress(g_realGl, "glGenTextures");
+        pglDeleteTextures = (void (APIENTRY *)(int, const unsigned int*))GetProcAddress(g_realGl, "glDeleteTextures");
+        pglTexImage2D = (void (APIENTRY *)(unsigned int, int, int, int, int, int, unsigned int, unsigned int, const void*))GetProcAddress(g_realGl, "glTexImage2D");
+        pglBegin = (void (APIENTRY *)(unsigned int))GetProcAddress(g_realGl, "glBegin");
+        pglEnd = (void (APIENTRY *)(void))GetProcAddress(g_realGl, "glEnd");
+        pglVertex2i = (void (APIENTRY *)(int, int))GetProcAddress(g_realGl, "glVertex2i");
+        pglTexCoord2f = (void (APIENTRY *)(float, float))GetProcAddress(g_realGl, "glTexCoord2f");
+        pglColor4f = (void (APIENTRY *)(float, float, float, float))GetProcAddress(g_realGl, "glColor4f");
+        pglMatrixMode = (void (APIENTRY *)(unsigned int))GetProcAddress(g_realGl, "glMatrixMode");
+        pglPushMatrix = (void (APIENTRY *)(void))GetProcAddress(g_realGl, "glPushMatrix");
+        pglPopMatrix = (void (APIENTRY *)(void))GetProcAddress(g_realGl, "glPopMatrix");
+        pglLoadIdentity = (void (APIENTRY *)(void))GetProcAddress(g_realGl, "glLoadIdentity");
+        pglPushAttrib = (void (APIENTRY *)(unsigned int))GetProcAddress(g_realGl, "glPushAttrib");
+        pglPopAttrib = (void (APIENTRY *)(void))GetProcAddress(g_realGl, "glPopAttrib");
+        pglDrawBuffer = (void (APIENTRY *)(unsigned int))GetProcAddress(g_realGl, "glDrawBuffer");
+        pglReadBuffer = (void (APIENTRY *)(unsigned int))GetProcAddress(g_realGl, "glReadBuffer");
+        pglDrawBuffers = (void (APIENTRY *)(int, const unsigned int*))load_gl("glDrawBuffers", "glDrawBuffersARB");
+        pglTexEnvi = (void (APIENTRY *)(unsigned int, unsigned int, int))GetProcAddress(g_realGl, "glTexEnvi");
+        pglClearColor = (void (APIENTRY *)(float, float, float, float))GetProcAddress(g_realGl, "glClearColor");
+        pglGetFloatv = (void (APIENTRY *)(unsigned int, float*))GetProcAddress(g_realGl, "glGetFloatv");
+        pglReadPixels = (void (APIENTRY *)(int, int, int, int, unsigned int, unsigned int, void*))GetProcAddress(g_realGl, "glReadPixels");
+        pglDrawPixels = (void (APIENTRY *)(int, int, unsigned int, unsigned int, const void*))GetProcAddress(g_realGl, "glDrawPixels");
+        pglPixelZoom = (void (APIENTRY *)(float, float))GetProcAddress(g_realGl, "glPixelZoom");
+        pglRasterPos2i = (void (APIENTRY *)(int, int))GetProcAddress(g_realGl, "glRasterPos2i");
+        pglPixelStorei = (void (APIENTRY *)(unsigned int, int))GetProcAddress(g_realGl, "glPixelStorei");
+        if (!pglGenFramebuffers || !pglBindFramebuffer || !pglFramebufferTexture2D || !pglTexImage2D) {
+            Log("SSAA: framebuffer objects not available, staying at 1x\n");
+            return 0;
+        }
+    }
+    static int lastW, lastH;
+    if (g_fbo && lastW == g_rtW && lastH == g_rtH) {
+        bind_ssaa_draw();
+        return 1;
+    }
+    destroy_ssaa();
+    lastW = g_rtW;
+    lastH = g_rtH;
+    pglGenTextures(1, &g_fboTex);
+    orig_glBindTexture(GL_TEXTURE_2D, g_fboTex);
+    pglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_rtW, g_rtH, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+    orig_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    orig_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    orig_glTexParameteri(GL_TEXTURE_2D, 0x813C /* TEXTURE_BASE_LEVEL */, 0);
+    orig_glTexParameteri(GL_TEXTURE_2D, 0x813D /* TEXTURE_MAX_LEVEL */, 0);
+    orig_glBindTexture(GL_TEXTURE_2D, 0);
+    pglGenRenderbuffers(1, &g_fboDs);
+    pglBindRenderbuffer(GL_RENDERBUFFER, g_fboDs);
+    pglRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, g_rtW, g_rtH);
+    pglGenFramebuffers(1, &g_fbo);
+    pglBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
+    pglFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_fboTex, 0);
+    pglFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, g_fboDs);
+    unsigned int st = pglCheckFramebufferStatus ? pglCheckFramebufferStatus(GL_FRAMEBUFFER) : GL_FRAMEBUFFER_COMPLETE;
+    if (st != GL_FRAMEBUFFER_COMPLETE) {
+        /* some drivers reject packed depth+stencil */
+        pglRenderbufferStorage(GL_RENDERBUFFER, 0x81A6 /* GL_DEPTH_COMPONENT24 */, g_rtW, g_rtH);
+        pglFramebufferRenderbuffer(GL_FRAMEBUFFER, 0x8D00 /* GL_DEPTH_ATTACHMENT */, GL_RENDERBUFFER, g_fboDs);
+        st = pglCheckFramebufferStatus ? pglCheckFramebufferStatus(GL_FRAMEBUFFER) : GL_FRAMEBUFFER_COMPLETE;
+    }
+    if (st != GL_FRAMEBUFFER_COMPLETE) {
+        Log("SSAA: FBO incomplete 0x%X\n", st);
+        destroy_ssaa();
+        return 0;
+    }
+    bind_ssaa_draw();
+    g_ssaaReady = 1;
+    Log("SSAA FBO %dx%d (scale %d%%)\n", g_rtW, g_rtH, g_renderScale);
+    return 1;
+}
+
+#define GL_QUADS 0x0007
+#define GL_PROJECTION 0x1701
+#define GL_MODELVIEW 0x1700
+#define GL_DEPTH_TEST 0x0B71
+#define GL_ALL_ATTRIB_BITS 0x000FFFFF
+#define GL_FRONT            0x0404
+#define GL_BACK             0x0405
+#define GL_FRONT_AND_BACK   0x0408
+
+static void present_ssaa()
+{
+    if (!g_fbo || !pglReadPixels || !pglDrawPixels) return;
+    int bytes = g_rtW * g_rtH * 4;
+    if (bytes > g_ssaaPixCap) {
+        free(g_ssaaPixels);
+        g_ssaaPixels = (unsigned char *)malloc((size_t)bytes);
+        g_ssaaPixCap = bytes;
+    }
+    if (!g_ssaaPixels) return;
+
+    bind_ssaa_draw();
+    if (pglReadBuffer) pglReadBuffer(GL_COLOR_ATTACHMENT0);
+    if (pglPixelStorei) pglPixelStorei(0x0D05 /* PACK_ALIGNMENT */, 1);
+    pglReadPixels(0, 0, g_rtW, g_rtH, GL_RGBA, GL_UNSIGNED_BYTE, g_ssaaPixels);
+
+    if (g_ssaaLogPresent < 3) {
+        unsigned long r = 0, g = 0, b = 0, n = (unsigned long)g_rtW * g_rtH;
+        unsigned long step = n > 10000 ? n / 10000 : 1;
+        unsigned long samples = 0;
+        for (unsigned long i = 0; i < n; i += step) {
+            r += g_ssaaPixels[i * 4];
+            g += g_ssaaPixels[i * 4 + 1];
+            b += g_ssaaPixels[i * 4 + 2];
+            samples++;
+        }
+        if (samples) Log("SSAA readback avg rgb %lu %lu %lu (n=%lu)\n",
+            r / samples, g / samples, b / samples, samples);
+        g_ssaaLogPresent++;
+    }
+
+    pglBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (pglDrawBuffer) pglDrawBuffer(GL_BACK);
+    if (orig_glDisable) orig_glDisable(GL_SCISSOR_TEST);
+    orig_glDisable(GL_DEPTH_TEST);
+    orig_glViewport(0, 0, g_winW, g_winH);
+    float oldc[4] = { 0, 0, 0, 1 };
+    if (pglGetFloatv) pglGetFloatv(0x0C22, oldc);
+    if (pglClearColor) pglClearColor(0, 0, 0, 1);
+    orig_glClear(GL_COLOR_BUFFER_BIT);
+    if (pglClearColor) pglClearColor(oldc[0], oldc[1], oldc[2], oldc[3]);
+
+    if (pglMatrixMode && pglPushMatrix && pglLoadIdentity && orig_glOrtho) {
+        pglMatrixMode(GL_PROJECTION);
+        pglPushMatrix();
+        pglLoadIdentity();
+        orig_glOrtho(0, g_winW, 0, g_winH, -1, 1);
+        pglMatrixMode(GL_MODELVIEW);
+        pglPushMatrix();
+        pglLoadIdentity();
+    }
+    if (pglPixelStorei) pglPixelStorei(0x0CF5 /* UNPACK_ALIGNMENT */, 1);
+    if (pglPixelZoom) pglPixelZoom((float)g_vpW / (float)g_rtW, (float)g_vpH / (float)g_rtH);
+    if (pglRasterPos2i) pglRasterPos2i(g_vpX, g_vpY);
+    pglDrawPixels(g_rtW, g_rtH, GL_RGBA, GL_UNSIGNED_BYTE, g_ssaaPixels);
+    if (pglPixelZoom) pglPixelZoom(1, 1);
+    if (pglMatrixMode && pglPopMatrix) {
+        pglMatrixMode(GL_MODELVIEW);
+        pglPopMatrix();
+        pglMatrixMode(GL_PROJECTION);
+        pglPopMatrix();
+    }
+}
+
+extern "C" void APIENTRY glDrawBuffer(unsigned int mode)
+{
+    if (g_fbo && (mode == GL_BACK || mode == GL_FRONT || mode == GL_FRONT_AND_BACK))
+        mode = GL_COLOR_ATTACHMENT0;
+    if (pglDrawBuffer) pglDrawBuffer(mode);
+}
+
+extern "C" void APIENTRY glReadBuffer(unsigned int mode)
+{
+    if (g_fbo && (mode == GL_BACK || mode == GL_FRONT || mode == GL_FRONT_AND_BACK))
+        mode = GL_COLOR_ATTACHMENT0;
+    if (pglReadBuffer) pglReadBuffer(mode);
+}
+
+static void GetRt(int *x, int *y, int *w, int *h)
+{
+    if (g_fbo && g_rtW > 0) {
+        *x = 0; *y = 0; *w = g_rtW; *h = g_rtH;
+    } else {
+        *x = g_vpX; *y = g_vpY; *w = g_vpW; *h = g_vpH;
+    }
 }
 
 static void RefreshClientSize()
@@ -362,18 +638,20 @@ static int IsFullVirtual(int x, int y, int w, int h)
 
 static void MapRect(int x, int y, int w, int h, int* ox, int* oy, int* ow, int* oh)
 {
-    if (g_vpW <= 0) {
+    int rx, ry, rw, rh;
+    GetRt(&rx, &ry, &rw, &rh);
+    if (rw <= 0) {
         *ox = x; *oy = y; *ow = w; *oh = h;
         return;
     }
     if (IsFullVirtual(x, y, w, h)) {
-        *ox = g_vpX; *oy = g_vpY; *ow = g_vpW; *oh = g_vpH;
+        *ox = rx; *oy = ry; *ow = rw; *oh = rh;
         return;
     }
-    *ox = g_vpX + (int)((long long)x * g_vpW / VIRT_W);
-    *oy = g_vpY + (int)((long long)y * g_vpH / VIRT_H);
-    *ow = (int)((long long)w * g_vpW / VIRT_W);
-    *oh = (int)((long long)h * g_vpH / VIRT_H);
+    *ox = rx + (int)((long long)x * rw / VIRT_W);
+    *oy = ry + (int)((long long)y * rh / VIRT_H);
+    *ow = (int)((long long)w * rw / VIRT_W);
+    *oh = (int)((long long)h * rh / VIRT_H);
     if (*ow < 1) *ow = 1;
     if (*oh < 1) *oh = 1;
 }
@@ -381,6 +659,7 @@ static void MapRect(int x, int y, int w, int h, int* ox, int* oy, int* ow, int* 
 extern "C" void APIENTRY glViewport(int x, int y, int w, int h)
 {
     RefreshClientSize();
+    if (g_fbo) bind_ssaa_draw();
     int ox, oy, ow, oh;
     MapRect(x, y, w, h, &ox, &oy, &ow, &oh);
     if (g_logged < 40) {
@@ -400,14 +679,24 @@ extern "C" void APIENTRY glScissor(int x, int y, int w, int h)
 
 extern "C" void APIENTRY glClear(unsigned int mask)
 {
-    if ((mask & GL_COLOR_BUFFER_BIT) && orig_glViewport && g_winW > 0) {
+    if ((mask & GL_COLOR_BUFFER_BIT) && orig_glViewport) {
         unsigned char scissor = 0;
         if (orig_glIsEnabled) scissor = orig_glIsEnabled(GL_SCISSOR_TEST);
-        orig_glViewport(0, 0, g_winW, g_winH);
         if (orig_glDisable) orig_glDisable(GL_SCISSOR_TEST);
-        orig_glClear(mask);
+        int rx, ry, rw, rh;
+        GetRt(&rx, &ry, &rw, &rh);
+        if (g_fbo && rw > 0) {
+            orig_glViewport(0, 0, rw, rh);
+            orig_glClear(mask);
+            orig_glViewport(rx, ry, rw, rh);
+        } else if (g_winW > 0) {
+            orig_glViewport(0, 0, g_winW, g_winH);
+            orig_glClear(mask);
+            orig_glViewport(g_vpX, g_vpY, g_vpW, g_vpH);
+        } else {
+            orig_glClear(mask);
+        }
         if (scissor && orig_glEnable) orig_glEnable(GL_SCISSOR_TEST);
-        orig_glViewport(g_vpX, g_vpY, g_vpW, g_vpH);
         return;
     }
     orig_glClear(mask);
@@ -473,14 +762,16 @@ extern "C" void APIENTRY glDisable(unsigned int cap)
 
 static void RealToVirtualRect(int rx, int ry, int rw, int rh, int* vx, int* vy, int* vw, int* vh)
 {
-    if (g_vpW <= 0 || g_vpH <= 0) {
+    int ox, oy, ow, oh;
+    GetRt(&ox, &oy, &ow, &oh);
+    if (ow <= 0 || oh <= 0) {
         *vx = rx; *vy = ry; *vw = rw; *vh = rh;
         return;
     }
-    *vx = (int)((double)(rx - g_vpX) * (double)VIRT_W / (double)g_vpW + 0.5);
-    *vy = (int)((double)(ry - g_vpY) * (double)VIRT_H / (double)g_vpH + 0.5);
-    *vw = (int)((double)rw * (double)VIRT_W / (double)g_vpW + 0.5);
-    *vh = (int)((double)rh * (double)VIRT_H / (double)g_vpH + 0.5);
+    *vx = (int)((double)(rx - ox) * (double)VIRT_W / (double)ow + 0.5);
+    *vy = (int)((double)(ry - oy) * (double)VIRT_H / (double)oh + 0.5);
+    *vw = (int)((double)rw * (double)VIRT_W / (double)ow + 0.5);
+    *vh = (int)((double)rh * (double)VIRT_H / (double)oh + 0.5);
     if (*vw < 1) *vw = 1;
     if (*vh < 1) *vh = 1;
 }
@@ -521,6 +812,7 @@ extern "C" PROC WINAPI wglGetProcAddress(LPCSTR name)
         if (!strcmp(name, "glTexParameteri")) return (PROC)glTexParameteri;
         if (!strcmp(name, "glEnable")) return (PROC)glEnable;
         if (!strcmp(name, "glDisable")) return (PROC)glDisable;
+        if (!strcmp(name, "glDrawBuffer")) return (PROC)glDrawBuffer;
     }
     return orig_wglGetProcAddress(name);
 }

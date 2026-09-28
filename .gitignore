@@ -3,10 +3,12 @@
 *.lib
 *.pdb
 *.ilk
+*.res
 *.log
 *.exe
 *.dll
 *.manifest
+!ufo_mod_manager.exe.manifest
 dist/
 .vs/
 *.user

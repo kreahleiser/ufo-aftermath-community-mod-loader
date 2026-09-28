@@ -1,0 +1,50 @@
+LIST_OF_WEAPON
+  WEAPON
+    ORIGIN HUMAN
+    TYPE MISSILE_LAUNCHER
+    SHORT_NAME "TNT"
+    ID ML-TNT
+    TECH_LEVEL 1
+    CLASS OTHER
+    ANIM_TYPE THROW
+    PRINCIPLE ROCKET
+    HANDLING NORMAL
+    EQUIPMENT ALL
+    MAG_QUANTITY 10
+    HAND 1.0
+    NOTRELOAD TRUE
+    WEIGHT 2.0
+    ACCURACY_AIMEDA 0.0
+    ACCURACY_BURSTA 0.0
+    ROUNDS_USED_AIMEDU 0
+    ROUNDS_USED_BURSTU 0
+    POWER 0
+    DAMAGE 0
+    TIMES_RELOAD 0.0
+    TIMES_AIMEDT 0.0
+    TIMES_BURSTT 0.0
+    RANGE 0.0
+    AREA 0.0
+    PROJ_SPEED 0.0
+    DURATION 0.0
+    SEC_DAMAGE 0.0
+    DTYPE ""
+    EFFECT_FRONT_AIM "tactical/particles/gun groups/human/rocket_smoke.pcfg"
+    EFFECT_FRONT_BURST ""
+    EFFECT_BACK "tactical/particles/gun groups/human/rocket_launcher.pgrp"
+    EFFECT_IMPACT ""
+    EFFECT_AREA ""
+    PATH_3D "tactical/models/weapons/h_eq-tnt_3d.txt"
+    VIDEO "strategic/models/interface/equipment/weapons/human guns/h_eq-tnt_video.txt"
+    ICON "tactical/models/interface/items/weapons/h_eq-tnt.txt"
+    PROJECTILE ""
+    PROJECTILEFIRE ""
+    PROJECTILESMOKE ""
+    PARTICLE ""
+    SHAPE "s21"
+    SOUND_NAME_A "share/sound/wavs/guns/rocket.wav"
+    SOUND_NAME_B "share/sound/wavs/guns/rocket.wav"
+    SOUND_NAME_RELOAD ""
+    SOUND_NAME_IMPACT "share/sound/wavs/guns/explosion.wav"
+  END_OF_WEAPON
+END_OF_LIST_OF_WEAPON

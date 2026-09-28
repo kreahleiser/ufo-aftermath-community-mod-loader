@@ -4,6 +4,14 @@
 *.pdb
 *.ilk
 *.log
-opengl32.dll
+*.exe
+*.dll
+*.manifest
+dist/
 .vs/
 *.user
+third_party/*.zip
+third_party/*.tar.gz
+third_party/lua51/
+third_party/miniz/
+third_party/puff/

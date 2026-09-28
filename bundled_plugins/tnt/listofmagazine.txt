@@ -1,0 +1,38 @@
+LIST_OF_MAGAZINE
+  MAGAZINE
+    ORIGIN HUMAN
+    ID MGML-TNT
+    WEAPON ML-TNT
+    TECH_LEVEL 1
+    WEIGHT 0.1
+    EJECT 0
+    AMMOID ID_RAW
+    ACCURACY_AIMEDA 1.5
+    ACCURACY_BURSTA 0.0
+    ROUNDS_USED_AIMEDU 1
+    ROUNDS_USED_BURSTU 0
+    DAMAGE 950
+    CAPACITY 1
+    TIMES_RELOAD 3.5
+    TIMES_AIMEDT 3.0
+    TIMES_BURSTT 0.0
+    RANGE 1.6
+    AREA 5.0
+    PROJ_SPEED 0.12
+    DURATION 0.0
+    SEC_DAMAGE 0.0
+    DTYPE "S"
+    PATH_3D "tactical/models/weapons/h_mggl-superstrike_3d.txt"
+    ICON "tactical/models/interface/items/magazines/h_mgml-osaw.txt"
+    PROJECTILE "tactical/models/weapons/h_eq-tnt_3d.txt"
+    PROJECTILEFIRE ""
+    PROJECTILESMOKE "tactical/particles/gun groups/human/tnt_beep.pcfg"
+    SHAPE "s11"
+    EFFECT_FRONT_AIM ""
+    EFFECT_FRONT_BURST ""
+    EFFECT_BACK ""
+    EFFECT_IMPACT "tactical/particles/hit_effect groups/rocket_hit02.pgrp"
+    EFFECT_AREA ""
+    SOUND_NAME_IMPACT "share/sound/wavs/guns/explosion.wav"
+  END_OF_MAGAZINE
+END_OF_LIST_OF_MAGAZINE

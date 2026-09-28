@@ -1,0 +1,10 @@
+LIST_OF_STR_RES
+  STR_RES
+    ID FIGHT/ML-TNT
+    LOCALE "TNT"
+  END_OF_STR_RES
+  STR_RES
+    ID FIGHT/ML-TNT-DETAILED_DESCRIPTION
+    LOCALE "A powerful explosive package and detonator.  The TNT has a fixed timer so soldiers must evacuate the blast area with haste.<br><br>The detonator flashes red when active.<br><br>"
+  END_OF_STR_RES
+END_OF_LIST_OF_STR_RES

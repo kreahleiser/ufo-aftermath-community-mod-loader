@@ -1,58 +1,62 @@
-# UFO Aftermath display helper
+# UFO Aftermath Community Mod Loader
 
-Fan-made **OpenGL wrapper** for *UFO: Aftermath* (2003). The stock game is locked to 1024×768 4:3. This loads instead of system `opengl32.dll` and:
+A fan-made **display fix** and **mod loader** for *UFO: Aftermath* (2003).
 
-- runs **borderless** at your monitor size
-- letterboxes a **16:9** picture (or a large 4:3) into the middle
-- maps the **mouse** to that letterbox
-- **caps FPS at 60** so AMD (and other uncapped GPUs) do not freeze the UI / geoscape
+This makes the game:
 
-Not affiliated with Altar, Fulqrum, or Valve.
+- Run **borderless** at your monitor size
+- Letterbox a **16:9** picture (or a large 4:3) into the middle
+- Map the **mouse** to that letterbox
+- Cap **FPS at 60** by default (change it in `ufo_mod_manager.exe`), so AMD and other uncapped GPUs do not freeze the UI
+- Load **ALPine `.lua` plugins** from a `mods` folder on launch
 
-**Prefer building it yourself.** A random `opengl32.dll` next to a game is exactly what malware looks like. The whole program is this repo. Releases also attach a DLL built from the same source.
+Not affiliated with Altar, Fulqrum, ALPine, or Valve.
 
 ## Install
 
-1. Get `opengl32.dll` — run `build.bat` locally, or download it from [Releases](../../releases).
-2. Copy it next to `UFO.exe`:
+1. Download the release zip from [Releases](../../releases).
+2. Copy `opengl32.dll`, `ufo_mod_manager.exe`, and the `plugins` folder next to `UFO.exe`:
 
    `Steam\steamapps\common\UFO Aftermath\`
 
-3. Launch once. The DLL writes `ufo_display.ini` beside itself with the defaults below. Delete `opengl32.dll` to uninstall.
+3. Launch once. The DLL writes `ufo_display.ini` and creates a `mods` folder. Bundled plugins stay in `plugins` until you tick them on.
 
-## Settings (`ufo_display.ini`)
+To uninstall, delete `opengl32.dll` and `ufo_mod_manager.exe`. You can also remove `mods`, `plugins`, `ufo_display.ini`, and `modalpine.vfs` if you want a clean folder.
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `Mode` | `169` | `169` = 16:9 3D + HUD stretched to 16:9, bars on ultrawide. `43` = largest 4:3 that fits (HUD unstretched). |
-| `Borderless` | `1` | Cover the current monitor. |
-| `FrameLimit` | `60` | Aftermath UI breaks if the GPU runs uncapped. `0` = unlimited (not recommended on AMD). |
-| `CrispUi` | `1` | Nearest-neighbour UI textures so bitmap fonts do not show cell borders. |
-| `Logging` | `0` | `1` writes `ufo_display.log` next to the DLL. |
+## Mods
+
+The release zip includes a `plugins` folder (off by default): **All Human Gear**, **TNT**, **Field of View**, and **Crisp Fonts**. Tick them in `ufo_mod_manager.exe` to enable. Extra files a plugin needs (for example the `tnt` folder next to `tnt.lua`) stay beside the script when you move it.
+
+You can also drop other ALPine-style `.lua` plugins into `mods`. They are applied on the next launch. Stock `gamedata.vfs` is never edited.
+
+Open `ufo_mod_manager.exe` to tick plugins on and off. Enabled mods live in `mods`. Unticked mods are parked in `plugins`, which the game does not read. Restart the game after changing ticks.
+
+Gameplay ideas for the bundled plugins, and the TNT art, come from ALPine by Andrew 'Fulby' Campbell (2003). The scripts themselves were written for this loader.
+
+Display options (borderless, 16:9 vs 4:3, frame rate, crisp UI, logging) are on the right of that same window. Changes apply the next time you start the game.
 
 ## Build (32-bit MSVC)
 
-Visual Studio with the **x86** C++ toolset. From a VS developer prompt, or just run `build.bat`:
+Only needed if you want to compile it yourself. Visual Studio with the **x86** C++ toolset, from this folder:
 
 ```bat
 build.bat
 ```
 
-That produces `opengl32.dll` in this folder. Copy it into the game directory.
+That produces `opengl32.dll` and `ufo_mod_manager.exe`. Copy them into the game directory.
 
-`gl_forwards.cpp` / `opengl32.def` trampoline every export of 32-bit `opengl32.dll` (system `glu32` imports functions Aftermath itself never calls). Regenerate with `powershell -File generate_forwards.ps1` if you need to.
+## Known Limits
 
-## Known limits
-
-- Not native 21:9 world rendering. Ultrawide is 16:9 (or 4:3) with side bars. Stretching the HUD across 21:9 looks worse than boxing 16:9.
+- Not native 21:9 world rendering. Ultrawide is 16:9 (or 4:3) with side bars.
 - FMVs stay 4:3 inside the letterbox.
 - HUD is still a 1024×768 layout, scaled. Squad portraits are corrected; a few screens can look slightly wide.
-- Antivirus may flag a game-folder `opengl32.dll`. That is a common false positive for wrappers. Build from this source.
+- Localization-pack text from some ALPine plugins is not written back yet, so extra item names can fall back to short names.
+- Antivirus may flag a game-folder `opengl32.dll`. That is a common false positive for wrappers. Build from this source if you would rather not run a prebuilt DLL.
 - If the game will not start, delete `opengl32.dll`.
 
 ## Why a DLL
 
-Aftermath is a 32-bit OpenGL 1.x binary with no source. The loader looks for `opengl32.dll` next to `UFO.exe` first. That is the least invasive hook: no patched `UFO.exe`, Steam file verify stays clean aside from the extra files.
+Windows loads `opengl32.dll` from the game folder first. That is how this hooks in: no patched `UFO.exe`, and Steam file verify stays clean aside from the extra files.
 
 ## License
 

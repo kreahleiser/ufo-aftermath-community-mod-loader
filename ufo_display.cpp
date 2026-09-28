@@ -7,6 +7,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdarg.h>
+#include "modloader.h"
 
 #ifndef APIENTRY
 #define APIENTRY __stdcall
@@ -27,7 +28,8 @@
 #define GL_POLYGON_SMOOTH   0x0B41
 #define GL_LINE_SMOOTH      0x0B20
 
-#define UFO_DISPLAY_VERSION "1.0.3"
+#define UFO_DISPLAY_VERSION "1.1.0"
+#define UFO_PRODUCT_NAME "UFO Aftermath Community Mod Loader"
 
 static const int VIRT_W = 1024;
 static const int VIRT_H = 768;
@@ -61,6 +63,8 @@ static LONG (WINAPI *orig_ChangeDisplaySettingsA)(DEVMODEA*, DWORD);
 static BOOL (WINAPI *orig_EnumDisplaySettingsA)(LPCSTR, DWORD, DEVMODEA*);
 static BOOL (WINAPI *orig_SwapBuffers)(HDC);
 static BOOL (WINAPI *orig_AdjustWindowRectEx)(LPRECT, DWORD, BOOL, DWORD);
+static HANDLE (WINAPI *orig_CreateFileA)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+static HANDLE (WINAPI *orig_FindFirstFileA)(LPCSTR, LPWIN32_FIND_DATAA);
 
 static void (APIENTRY *orig_glViewport)(int, int, int, int);
 static void (APIENTRY *orig_glScissor)(int, int, int, int);
@@ -81,6 +85,7 @@ static void (APIENTRY *orig_gluOrtho2D)(double, double, double, double);
 
 void InitForwards(HMODULE real);
 static void InstallMessageHook(HWND hwnd);
+static void GetSelfDir(char* buf, size_t n);
 
 static void Log(const char* fmt, ...)
 {
@@ -90,6 +95,27 @@ static void Log(const char* fmt, ...)
     vfprintf(g_log, fmt, ap);
     va_end(ap);
     fflush(g_log);
+}
+
+extern "C" void ModLog(const char *fmt, ...)
+{
+    char path[MAX_PATH];
+    GetSelfDir(path, MAX_PATH);
+    strcat_s(path, "ufo_display.log");
+    FILE *f = fopen(path, "a");
+    if (!f) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+    fclose(f);
+    if (g_log) {
+        va_list ap2;
+        va_start(ap2, fmt);
+        vfprintf(g_log, fmt, ap2);
+        va_end(ap2);
+        fflush(g_log);
+    }
 }
 
 static void GetSelfDir(char* buf, size_t n)
@@ -104,8 +130,9 @@ static void WriteDefaultIni(const char* path)
 {
     if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) return;
     static const char kIni[] =
-        "; UFO Aftermath display helper " UFO_DISPLAY_VERSION "\r\n"
+        "; UFO Aftermath Community Mod Loader " UFO_DISPLAY_VERSION "\r\n"
         "; Created automatically on first launch. Delete this file to restore defaults.\r\n"
+        "; ALPine plugins: put .lua files in the mods folder next to UFO.exe.\r\n"
         "\r\n"
         "[Display]\r\n"
         "; 169 = 16:9 3D + HUD stretched to 16:9, pillarboxed on ultrawide (default)\r\n"
@@ -155,7 +182,7 @@ static void OpenLog()
     GetSelfDir(path, MAX_PATH);
     strcat_s(path, "ufo_display.log");
     g_log = fopen(path, "w");
-    Log("UFO display helper %s (mode=%d borderless=%d cap=%d)\n",
+    Log(UFO_PRODUCT_NAME " %s (mode=%d borderless=%d cap=%d)\n",
         UFO_DISPLAY_VERSION, g_mode, g_borderless, g_frameLimit);
 }
 
@@ -194,6 +221,44 @@ static void RefreshClientSize()
     int h = rc.bottom - rc.top;
     if (w < 2 || h < 2) return;
     ComputeLetterbox(w, h);
+}
+
+static int g_wokeWindow;
+
+static void WakeWindow(HWND hwnd)
+{
+    if (!hwnd) return;
+
+    HWND fg = GetForegroundWindow();
+    DWORD fgTid = fg ? GetWindowThreadProcessId(fg, NULL) : 0;
+    DWORD ourTid = GetCurrentThreadId();
+    if (fgTid && fgTid != ourTid)
+        AttachThreadInput(fgTid, ourTid, TRUE);
+
+    AllowSetForegroundWindow(ASFW_ANY);
+    ShowWindow(hwnd, SW_SHOW);
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    BringWindowToTop(hwnd);
+    SetForegroundWindow(hwnd);
+    SetActiveWindow(hwnd);
+    SetFocus(hwnd);
+
+    if (fgTid && fgTid != ourTid)
+        AttachThreadInput(fgTid, ourTid, FALSE);
+
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    LPARAM size = MAKELPARAM(rc.right - rc.left, rc.bottom - rc.top);
+    PostMessageA(hwnd, WM_SIZE, SIZE_RESTORED, size);
+    PostMessageA(hwnd, WM_DISPLAYCHANGE, 32, size);
+    PostMessageA(hwnd, WM_ACTIVATEAPP, TRUE, 0);
+    PostMessageA(hwnd, WM_ACTIVATE, WA_ACTIVE, 0);
+    PostMessageA(hwnd, WM_SETFOCUS, 0, 0);
+    PostMessageA(hwnd, WM_EXITSIZEMOVE, 0, 0);
+    RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
 static void ApplyBorderless(HDC dc)
@@ -239,6 +304,10 @@ static void ApplyBorderless(HDC dc)
     SetWindowPos(hwnd, HWND_TOP, x, y, w, h, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
     ComputeLetterbox(w, h);
     g_borderlessApplied = 1;
+    if (!g_wokeWindow) {
+        WakeWindow(hwnd);
+        g_wokeWindow = 1;
+    }
     Log("borderless %dx%d at %d,%d\n", w, h, x, y);
 }
 
@@ -622,6 +691,18 @@ static BOOL WINAPI hook_SwapBuffers(HDC dc)
     return ok;
 }
 
+static HANDLE WINAPI hook_CreateFileA(LPCSTR name, DWORD acc, DWORD share, LPSECURITY_ATTRIBUTES sa, DWORD disp, DWORD flags, HANDLE tmpl)
+{
+    EnsureModsApplied();
+    return orig_CreateFileA(name, acc, share, sa, disp, flags, tmpl);
+}
+
+static HANDLE WINAPI hook_FindFirstFileA(LPCSTR name, LPWIN32_FIND_DATAA fd)
+{
+    EnsureModsApplied();
+    return orig_FindFirstFileA(name, fd);
+}
+
 static int IATHook(HMODULE client, const char* dll, const char* func, void* hook, void** orig)
 {
     if (!client) return 0;
@@ -659,8 +740,8 @@ static FARPROC Must(HMODULE m, const char* n)
     FARPROC p = GetProcAddress(m, n);
     if (!p) {
         char buf[256];
-        wsprintfA(buf, "ufo display helper: missing %s", n);
-        MessageBoxA(NULL, buf, "UFO display helper", MB_ICONERROR);
+        wsprintfA(buf, UFO_PRODUCT_NAME ": missing %s", n);
+        MessageBoxA(NULL, buf, UFO_PRODUCT_NAME, MB_ICONERROR);
     }
     return p;
 }
@@ -679,7 +760,7 @@ static void InitHooks()
     wcscat_s(sys, L"\\opengl32.dll");
     g_realGl = LoadLibraryW(sys);
     if (!g_realGl) {
-        MessageBoxA(NULL, "Could not load system opengl32.dll", "UFO display helper", MB_ICONERROR);
+        MessageBoxA(NULL, "Could not load system opengl32.dll", UFO_PRODUCT_NAME, MB_ICONERROR);
         return;
     }
     InitForwards(g_realGl);
@@ -716,6 +797,10 @@ static void InitHooks()
     HMODULE gdi = GetModuleHandleA("gdi32.dll");
     orig_SwapBuffers = (BOOL (WINAPI*)(HDC))GetProcAddress(gdi, "SwapBuffers");
 
+    HMODULE k32 = GetModuleHandleA("KERNEL32.dll");
+    orig_CreateFileA = (HANDLE (WINAPI*)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE))GetProcAddress(k32, "CreateFileA");
+    orig_FindFirstFileA = (HANDLE (WINAPI*)(LPCSTR, LPWIN32_FIND_DATAA))GetProcAddress(k32, "FindFirstFileA");
+
     HMODULE exe = GetModuleHandleA(NULL);
     IATHook(exe, "USER32.dll", "GetSystemMetrics", hook_GetSystemMetrics, (void**)&orig_GetSystemMetrics);
     IATHook(exe, "USER32.dll", "GetCursorPos", hook_GetCursorPos, (void**)&orig_GetCursorPos);
@@ -725,6 +810,8 @@ static void InitHooks()
     IATHook(exe, "USER32.dll", "EnumDisplaySettingsA", hook_EnumDisplaySettingsA, (void**)&orig_EnumDisplaySettingsA);
     IATHook(exe, "USER32.dll", "AdjustWindowRectEx", hook_AdjustWindowRectEx, (void**)&orig_AdjustWindowRectEx);
     IATHook(exe, "GDI32.dll", "SwapBuffers", hook_SwapBuffers, (void**)&orig_SwapBuffers);
+    IATHook(exe, "KERNEL32.dll", "CreateFileA", hook_CreateFileA, (void**)&orig_CreateFileA);
+    IATHook(exe, "KERNEL32.dll", "FindFirstFileA", hook_FindFirstFileA, (void**)&orig_FindFirstFileA);
     if (orig_gluPerspective)
         IATHook(exe, "GLU32.dll", "gluPerspective", hook_gluPerspective, (void**)&orig_gluPerspective);
     if (orig_gluOrtho2D)

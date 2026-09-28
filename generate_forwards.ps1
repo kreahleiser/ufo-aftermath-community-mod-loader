@@ -23,7 +23,9 @@ foreach ($line in $raw -split "`r?`n") {
 if ($exports.Count -lt 300) { throw "expected ~368 OpenGL exports, got $($exports.Count)" }
 
 $hooked = [System.Collections.Generic.HashSet[string]]::new([string[]]@(
-  "glClear","glViewport","glScissor","glOrtho","glGetIntegerv","wglMakeCurrent","wglGetProcAddress"
+  "glClear","glViewport","glScissor","glOrtho","glGetIntegerv",
+  "glBindTexture","glTexParameteri","glEnable","glDisable",
+  "wglMakeCurrent","wglGetProcAddress"
 ))
 
 $def = New-Object System.Text.StringBuilder

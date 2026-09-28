@@ -16,8 +16,18 @@
 #define GL_SCISSOR_TEST     0x00000C11
 #define GL_VIEWPORT         0x0BA2
 #define GL_SCISSOR_BOX      0x0C10
+#define GL_TEXTURE_2D       0x0DE1
+#define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_WRAP_S   0x2802
+#define GL_TEXTURE_WRAP_T   0x2803
+#define GL_NEAREST          0x2600
+#define GL_LINEAR           0x2601
+#define GL_CLAMP_TO_EDGE    0x812F
+#define GL_POLYGON_SMOOTH   0x0B41
+#define GL_LINE_SMOOTH      0x0B20
 
-#define UFO_DISPLAY_VERSION "1.0.1"
+#define UFO_DISPLAY_VERSION "1.0.3"
 
 static const int VIRT_W = 1024;
 static const int VIRT_H = 768;
@@ -28,6 +38,8 @@ static HWND    g_hwnd;
 static int     g_mode = 169;      // 169 or 43
 static int     g_borderless = 1;
 static int     g_frameLimit = 60;
+static int     g_crispUi = 1;
+static int     g_in2D;
 static int     g_vpX, g_vpY, g_vpW, g_vpH;
 static int     g_winW, g_winH;
 static int     g_inited;
@@ -58,6 +70,8 @@ static void (APIENTRY *orig_glGetIntegerv)(unsigned int, int*);
 static void (APIENTRY *orig_glDisable)(unsigned int);
 static void (APIENTRY *orig_glEnable)(unsigned int);
 static unsigned char (APIENTRY *orig_glIsEnabled)(unsigned int);
+static void (APIENTRY *orig_glBindTexture)(unsigned int, unsigned int);
+static void (APIENTRY *orig_glTexParameteri)(unsigned int, unsigned int, int);
 static BOOL (WINAPI *orig_wglMakeCurrent)(HDC, HGLRC);
 static PROC (WINAPI *orig_wglGetProcAddress)(LPCSTR);
 static HDC  (WINAPI *orig_wglGetCurrentDC)(void);
@@ -86,15 +100,50 @@ static void GetSelfDir(char* buf, size_t n)
     else buf[0] = 0;
 }
 
+static void WriteDefaultIni(const char* path)
+{
+    if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) return;
+    static const char kIni[] =
+        "; UFO Aftermath display helper " UFO_DISPLAY_VERSION "\r\n"
+        "; Created automatically on first launch. Delete this file to restore defaults.\r\n"
+        "\r\n"
+        "[Display]\r\n"
+        "; 169 = 16:9 3D + HUD stretched to 16:9, pillarboxed on ultrawide (default)\r\n"
+        "; 43  = largest 4:3 that fits (HUD unstretched, still much bigger than 1024x768)\r\n"
+        "Mode=169\r\n"
+        "\r\n"
+        "; 1 = borderless fullscreen on the current monitor\r\n"
+        "; 0 = do not resize the window\r\n"
+        "Borderless=1\r\n"
+        "\r\n"
+        "; Cap FPS. Aftermath UI/geoscape break if the GPU runs uncapped (common on AMD).\r\n"
+        "; 60 is what the engine was built for. 0 = unlimited.\r\n"
+        "FrameLimit=60\r\n"
+        "\r\n"
+        "; 1 = nearest-neighbour UI textures (kills bitmap-font cell borders when scaled)\r\n"
+        "; 0 = leave the game's linear filtering\r\n"
+        "CrispUi=1\r\n"
+        "\r\n"
+        "; 1 = write ufo_display.log next to the DLL (for bug reports)\r\n"
+        "Logging=0\r\n";
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    WriteFile(h, kIni, (DWORD)(sizeof(kIni) - 1), &written, NULL);
+    CloseHandle(h);
+}
+
 static void LoadIni()
 {
     char path[MAX_PATH];
     GetSelfDir(path, MAX_PATH);
     strcat_s(path, "ufo_display.ini");
+    WriteDefaultIni(path);
     g_mode = GetPrivateProfileIntA("Display", "Mode", 169, path);
     g_borderless = GetPrivateProfileIntA("Display", "Borderless", 1, path);
     g_logging = GetPrivateProfileIntA("Display", "Logging", 0, path);
     g_frameLimit = GetPrivateProfileIntA("Display", "FrameLimit", 60, path);
+    g_crispUi = GetPrivateProfileIntA("Display", "CrispUi", 1, path);
     if (g_mode != 43 && g_mode != 169) g_mode = 169;
     if (g_frameLimit < 0) g_frameLimit = 0;
 }
@@ -295,6 +344,25 @@ extern "C" void APIENTRY glClear(unsigned int mask)
     orig_glClear(mask);
 }
 
+static void ApplyCrispUi(void)
+{
+    if (!g_crispUi || !g_in2D || !orig_glTexParameteri) return;
+    orig_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    orig_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    orig_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    orig_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (orig_glDisable) {
+        orig_glDisable(GL_POLYGON_SMOOTH);
+        orig_glDisable(GL_LINE_SMOOTH);
+    }
+}
+
+static void SetUiPass(int on)
+{
+    g_in2D = on ? 1 : 0;
+    if (g_in2D) ApplyCrispUi();
+}
+
 extern "C" void APIENTRY glOrtho(double l, double r, double b, double t, double zn, double zf)
 {
     if (g_logged < 50) {
@@ -302,6 +370,36 @@ extern "C" void APIENTRY glOrtho(double l, double r, double b, double t, double 
         g_logged++;
     }
     orig_glOrtho(l, r, b, t, zn, zf);
+    SetUiPass(1);
+}
+
+extern "C" void APIENTRY glBindTexture(unsigned int target, unsigned int texture)
+{
+    orig_glBindTexture(target, texture);
+    if (target == GL_TEXTURE_2D) ApplyCrispUi();
+}
+
+extern "C" void APIENTRY glTexParameteri(unsigned int target, unsigned int pname, int param)
+{
+    if (g_crispUi && g_in2D && target == GL_TEXTURE_2D) {
+        if (pname == GL_TEXTURE_MAG_FILTER || pname == GL_TEXTURE_MIN_FILTER)
+            param = GL_NEAREST;
+        else if (pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T)
+            param = GL_CLAMP_TO_EDGE;
+    }
+    orig_glTexParameteri(target, pname, param);
+}
+
+extern "C" void APIENTRY glEnable(unsigned int cap)
+{
+    if (g_crispUi && g_in2D && (cap == GL_POLYGON_SMOOTH || cap == GL_LINE_SMOOTH))
+        return;
+    orig_glEnable(cap);
+}
+
+extern "C" void APIENTRY glDisable(unsigned int cap)
+{
+    orig_glDisable(cap);
 }
 
 static void RealToVirtualRect(int rx, int ry, int rw, int rh, int* vx, int* vy, int* vw, int* vh)
@@ -350,6 +448,10 @@ extern "C" PROC WINAPI wglGetProcAddress(LPCSTR name)
         if (!strcmp(name, "glClear")) return (PROC)glClear;
         if (!strcmp(name, "glOrtho")) return (PROC)glOrtho;
         if (!strcmp(name, "glGetIntegerv")) return (PROC)glGetIntegerv;
+        if (!strcmp(name, "glBindTexture")) return (PROC)glBindTexture;
+        if (!strcmp(name, "glTexParameteri")) return (PROC)glTexParameteri;
+        if (!strcmp(name, "glEnable")) return (PROC)glEnable;
+        if (!strcmp(name, "glDisable")) return (PROC)glDisable;
     }
     return orig_wglGetProcAddress(name);
 }
@@ -370,6 +472,7 @@ static void APIENTRY hook_gluPerspective(double fovy, double aspect, double zn, 
         g_logged++;
     }
     orig_gluPerspective(fovy, a, zn, zf);
+    SetUiPass(0);
 }
 
 static void APIENTRY hook_gluOrtho2D(double l, double r, double b, double t)
@@ -379,6 +482,7 @@ static void APIENTRY hook_gluOrtho2D(double l, double r, double b, double t)
         g_logged++;
     }
     orig_gluOrtho2D(l, r, b, t);
+    SetUiPass(1);
 }
 
 static int WINAPI hook_GetSystemMetrics(int idx)
@@ -588,6 +692,8 @@ static void InitHooks()
     orig_glDisable = (void (APIENTRY*)(unsigned int))Must(g_realGl, "glDisable");
     orig_glEnable = (void (APIENTRY*)(unsigned int))Must(g_realGl, "glEnable");
     orig_glIsEnabled = (unsigned char (APIENTRY*)(unsigned int))Must(g_realGl, "glIsEnabled");
+    orig_glBindTexture = (void (APIENTRY*)(unsigned int, unsigned int))Must(g_realGl, "glBindTexture");
+    orig_glTexParameteri = (void (APIENTRY*)(unsigned int, unsigned int, int))Must(g_realGl, "glTexParameteri");
     orig_wglMakeCurrent = (BOOL (WINAPI*)(HDC,HGLRC))Must(g_realGl, "wglMakeCurrent");
     orig_wglGetProcAddress = (PROC (WINAPI*)(LPCSTR))Must(g_realGl, "wglGetProcAddress");
     orig_wglGetCurrentDC = (HDC (WINAPI*)(void))Must(g_realGl, "wglGetCurrentDC");

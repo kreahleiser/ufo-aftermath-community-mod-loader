@@ -14,11 +14,11 @@ Not affiliated with Altar, Fulqrum, or Valve.
 ## Install
 
 1. Get `opengl32.dll` — run `build.bat` locally, or download it from [Releases](../../releases).
-2. Copy **`opengl32.dll`** and **`ufo_display.ini`** next to `UFO.exe`:
+2. Copy it next to `UFO.exe`:
 
    `Steam\steamapps\common\UFO Aftermath\`
 
-3. Launch the game as usual. Delete `opengl32.dll` to uninstall.
+3. Launch once. The DLL writes `ufo_display.ini` beside itself with the defaults below. Delete `opengl32.dll` to uninstall.
 
 ## Settings (`ufo_display.ini`)
 
@@ -27,6 +27,7 @@ Not affiliated with Altar, Fulqrum, or Valve.
 | `Mode` | `169` | `169` = 16:9 3D + HUD stretched to 16:9, bars on ultrawide. `43` = largest 4:3 that fits (HUD unstretched). |
 | `Borderless` | `1` | Cover the current monitor. |
 | `FrameLimit` | `60` | Aftermath UI breaks if the GPU runs uncapped. `0` = unlimited (not recommended on AMD). |
+| `CrispUi` | `1` | Nearest-neighbour UI textures so bitmap fonts do not show cell borders. |
 | `Logging` | `0` | `1` writes `ufo_display.log` next to the DLL. |
 
 ## Build (32-bit MSVC)
@@ -37,7 +38,7 @@ Visual Studio with the **x86** C++ toolset. From a VS developer prompt, or just 
 build.bat
 ```
 
-That produces `opengl32.dll` in this folder. Copy it into the game directory with `ufo_display.ini`.
+That produces `opengl32.dll` in this folder. Copy it into the game directory.
 
 `gl_forwards.cpp` / `opengl32.def` trampoline every export of 32-bit `opengl32.dll` (system `glu32` imports functions Aftermath itself never calls). Regenerate with `powershell -File generate_forwards.ps1` if you need to.
 

@@ -11,7 +11,7 @@ EXPORTS
     glAreTexturesResident = tramp_glAreTexturesResident @9
     glArrayElement = tramp_glArrayElement @10
     glBegin = tramp_glBegin @11
-    glBindTexture = tramp_glBindTexture @12
+    glBindTexture @12
     glBitmap = tramp_glBitmap @13
     glBlendFunc = tramp_glBlendFunc @14
     glCallList = tramp_glCallList @15
@@ -70,7 +70,7 @@ EXPORTS
     glDepthFunc = tramp_glDepthFunc @68
     glDepthMask = tramp_glDepthMask @69
     glDepthRange = tramp_glDepthRange @70
-    glDisable = tramp_glDisable @71
+    glDisable @71
     glDisableClientState = tramp_glDisableClientState @72
     glDrawArrays = tramp_glDrawArrays @73
     glDrawBuffer = tramp_glDrawBuffer @74
@@ -79,7 +79,7 @@ EXPORTS
     glEdgeFlag = tramp_glEdgeFlag @77
     glEdgeFlagPointer = tramp_glEdgeFlagPointer @78
     glEdgeFlagv = tramp_glEdgeFlagv @79
-    glEnable = tramp_glEnable @80
+    glEnable @80
     glEnableClientState = tramp_glEnableClientState @81
     glEnd = tramp_glEnd @82
     glEndList = tramp_glEndList @83
@@ -311,7 +311,7 @@ EXPORTS
     glTexImage2D = tramp_glTexImage2D @309
     glTexParameterf = tramp_glTexParameterf @310
     glTexParameterfv = tramp_glTexParameterfv @311
-    glTexParameteri = tramp_glTexParameteri @312
+    glTexParameteri @312
     glTexParameteriv = tramp_glTexParameteriv @313
     glTexSubImage1D = tramp_glTexSubImage1D @314
     glTexSubImage2D = tramp_glTexSubImage2D @315
